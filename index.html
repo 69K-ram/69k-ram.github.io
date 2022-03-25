@@ -115,8 +115,8 @@ vec3 at (in Ray r, float t) { // location of ray at t value
 
 //////////////////////////////////////////////////////////////////////////
 const float AAthreshold = 0.3; // 0.3 is good
-const float SamplesPerPixel = 20.0;
-const float BounceLimit = 10.0;
+const float SamplesPerPixel = 50.0;
+const float BounceLimit = 50.0;
 
 const int WorldLength = 3; // how many objects in the scene
 Sphere World[WorldLength] = Sphere[WorldLength]( 
@@ -209,7 +209,7 @@ vec3 rayColour (Ray r, Sphere scene[WorldLength]) {
   	bounces++;
 		
 		vec3 bounceTarget = reflect(r.direction , record.normal) + record.p;
-		//vec3 bounceTarget = record.normal + record.p + randomInSphere(gl_FragCoord.xy, bounces);
+		//vec3 bounceTarget = record.normal + record.p + randomInSphere(gl_FragCoord.xy, bounces)/2.0;
 		r.origin = record.p;
 		r.direction = bounceTarget - r.origin;
 		
@@ -228,10 +228,10 @@ vec3 rayColour (Ray r, Sphere scene[WorldLength]) {
 }
     
 void main() {
-	World[0].centre.x += sin(iTime);
-  World[0].centre.y += cos(iTime);
-	World[2].centre.x += -sin(iTime);
-  World[2].centre.y += -cos(iTime);
+	World[0].centre.x = sin(iTime);
+  World[0].centre.y = cos(iTime) + 1.0;
+	World[2].centre.x = -sin(iTime);
+  World[2].centre.y = -cos(iTime) + 1.0;
   //cam.location.z = sin(iTime);
  	
   vec3 AAcheck[4];
