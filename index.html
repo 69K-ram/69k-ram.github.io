@@ -25,6 +25,33 @@ uniform float iTime;
 // output for the fragment shader
 out vec4 outColour;
 
+// commonly used randomizer function from shadertoy
+float nrand(vec2 p)
+{
+	vec3 p3  = fract(vec3(p.xyx) * .1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// randomizer function that changes from frame to frame
+// takes a seed to make individual draws different
+float trand(vec2 n, float seed)
+{
+    return nrand(n * seed * iTime) * 2.0 - 1.0;
+}
+
+vec3 randomInSphere(vec2 uv, float seed){
+    // this is doing rejection sampling, which is simple but not super efficient
+    vec3 p;
+    do {
+        p = vec3(trand(uv, seed),
+                 trand(uv, 2.333*seed),
+                 trand(uv, -1.134*seed));
+        seed *= 1.312;
+    } while (dot(p, p) >= 1.0);
+    return p;
+}
+    
 struct Ray {
 	vec3 origin;
 	vec3 direction;
@@ -35,52 +62,82 @@ struct Hit {
 	vec3 normal;
 	float t;
 	bool inside; // if the ray hit the outside or inside
+	int object; // array id of object hit
+};
+
+struct Material {
+	vec3 colour;
+	float shiny;
 };
 
 struct Sphere { 
     vec3 centre;
     float radius;
+		Material mat;
 };
 
-Sphere World[2] = Sphere[2]( 
-    Sphere( vec3(0.0,0.0,-1.0), 0.5),
-    Sphere( vec3(-1.0,-20.0,-3.0), 19.5)
+struct Camera {
+   vec3 location;
+   float focalDistance;
+};
+    
+Camera cam = Camera( 
+    vec3(0.0, 0.0, 2.0),
+    -1.0
 );
-const int WorldLength = World.length(); // how many objects in the scene
 
-vec3 at (in Ray r, float t) { // location of ray at t value
-	return vec3(r.origin + r.direction * t);
-}
+const Material blue = Material( vec3(0.0, 0.0, 0.9), 0.9);
+const Material red  = Material( vec3(0.9, 0.0, 0.0), 0.2);
+const Material green  = Material( vec3(0.0, 0.7, 0.2), 0.2);
+const Material yellow  = Material( vec3(0.5, 0.5, 0.0), 0.2);
+const Material white = Material( vec3(0.9, 0.9, 0.9), 0.0);
 
-bool hitWorld (Sphere scene[WorldLength], Ray r, inout Hit record, float t_min, float t_max) {
-    bool hitSomething = false;
-    float closest = t_max;
-    Hit rec = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false);
-    
-    for (int i; i <= WorldLength; i++) {
-      if (
-          hitSphere(
-              vec3(0.0, 0.0, -1.0),
-              0.5, 
-              Ray( vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0)),
-              rec,
-              0.01, 100.0
-          )
-           == true){
-            hitSomething = true;
-            closest = rec.t;
-            record = rec;
-        }
-    }
-    return hitSomething;
+// calculates the ray from the camera position and the offset (for anti aliasing)
+Ray GetRay (Camera camera, vec2 shift) {
+	vec3 pixelTargetUV = vec3(
+    (gl_FragCoord.xy/iResolution.xy) * 2.0 - 1.0,
+    camera.focalDistance
+  ); // x,y direction from [-1,1]
+	
+	shift /= iResolution.xy;
+	shift *= 2.0 - 1.0;
+	pixelTargetUV.xy += shift;
+  pixelTargetUV += camera.location;
+  float aspectRatio = iResolution.x / iResolution.y;
+  pixelTargetUV.x *= aspectRatio;
+  vec3 rayDir = normalize(pixelTargetUV - camera.location);
+  return Ray(camera.location, rayDir);
 }
     
-bool hitSphere (vec3 centre, float radius, Ray r, inout Hit record, float t_min, float t_max) {
-	vec3 oc = r.origin - centre;
+vec3 at (in Ray r, float t) { // location of ray at t value 
+  return vec3(r.origin + r.direction * t);
+}
+
+//////////////////////////////////////////////////////////////////////////
+const float AAthreshold = 0.3; // 0.3 is good
+const float SamplesPerPixel = 20.0;
+const float BounceLimit = 10.0;
+
+const int WorldLength = 3; // how many objects in the scene
+Sphere World[WorldLength] = Sphere[WorldLength]( 
+    Sphere( vec3(0.0,    1.0, -1.0),   0.5, blue),
+    Sphere( vec3(0.0, -100.5, -1.0), 100.0, green),
+		Sphere( vec3(0.0,    2.0, -1.0),   0.5, yellow)
+);
+
+const int LightLength = 2; // how many lights in the scene
+Sphere Lights[LightLength] = Sphere[LightLength]( 
+    Sphere( vec3(0.0, 200.0, -1.0), 10.0, white),
+		Sphere( vec3(-20.0, 20.0, -1.0), 10.0, white)
+);
+//////////////////////////////////////////////////////////////////////////
+ 
+bool hitSphere (Sphere sphere, Ray r, inout Hit record, float t_min, float t_max) {
+	vec3 oc = r.origin - sphere.centre;
 	
 	float a = dot(r.direction, r.direction);
 	float half_b = dot(oc, r.direction);
-	float c = dot(oc, oc) - radius*radius;
+	float c = dot(oc, oc) - sphere.radius*sphere.radius;
 	
 	float discriminant = half_b*half_b - a*c;
 	if (discriminant < 0.0) { return false; }
@@ -95,32 +152,142 @@ bool hitSphere (vec3 centre, float radius, Ray r, inout Hit record, float t_min,
 	}
 	record.t = root;
 	record.p = at(r, root);
-	record.normal = normalize((record.p - centre) / radius);
-	
+	//record.normal = normalize((record.p - sphere.centre) / sphere.radius);
+	record.normal = (record.p - sphere.centre) / sphere.radius;
 	return true;
 }
 
-vec3 rayColour (Ray r, Sphere scene[WorldLength]) {
-	//if (hitWorld(scene, r, rec, 0.01, 100.0) == true) {
-	//	return 0.5*vec3(rec.normal + 1.0);
-	//}
-	vec3 unitDirection = normalize(r.direction);
-	float t = 0.5 * (unitDirection.y + 1.0);
+bool hitWorld (Sphere scene[WorldLength], Ray r, out Hit record) {
+		Hit temp_hit = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false, 0);
+    bool hitSomething = false;
+    float closest = 100.0;
+    
+    for (int i = 0; i <= WorldLength - 1; i++) {
+      if ( hitSphere(World[i], r, temp_hit, 0.001, 100.0) == true && temp_hit.t < closest) {
+        hitSomething = true;
+        closest = temp_hit.t;
+				temp_hit.object = i;
+        record = temp_hit;
+        }
+    }
+    return hitSomething;
+}
+
+float lighting(Ray r, vec3 normal) {
+	Hit shadowHit = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false, 0);
+	bool shadowed = true;
+	float light = 0.3; // inital ambient amount
+	vec3 reflected = normalize(reflect(r.direction, normal));
+  for (int i = 0; i <= LightLength - 1; i++) {
+    //Ray lightRay = Ray(r.origin, normalize( (Lights[i].centre + (randomInSphere(gl_FragCoord.xy, 1.234) * Lights[i].radius) - r.origin) ));
+		Ray lightRay = Ray(r.origin, normalize(Lights[i].centre  - r.origin) );
+    if (hitWorld(World, lightRay, shadowHit) == true) {
+    } else {
+    	light += max( dot(lightRay.direction, normalize(normal)), 0.0);
+			light += max( dot(reflected, normalize(normal)), 0.0);
+    	shadowed = false;
+    }
+  }
+  return light;
+}
+
+vec3 skyColour (vec3 direction) {
+	float t = 0.5 * (normalize(direction).y + 1.0);
 	return vec3( (1.0-t)*vec3(1,1,1) + t*vec3(0.5,0.7,1.0) );
 }
 
-void main() {
-	float screenDist = -1.0; 
-	vec3 origin = vec3(0,0,0); // start of ray
-	vec3 pixelTarget = vec3((gl_FragCoord.xy/iResolution.xy) * 2.0 - 1.0, screenDist);
-	
-	float aspectRatio = iResolution.x / iResolution.y;
-	pixelTarget.y /= aspectRatio;
-	
-	vec3 rayDir = normalize(pixelTarget - origin);
-	Ray ray = Ray(origin, rayDir);
-	outColour = vec4(rayColour(ray, World), 1.0);
+vec3 rayColour (Ray r, Sphere scene[WorldLength]) {
+  Hit record = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false, 1 );
+    
+  vec3 unitDirection;
+  float t;
+  float bounces = 0.0;
+  vec3 colour = vec3(0.0, 0.0, 0.0);
+	float shiny = 1.0;
+
+  while ( hitWorld(scene, r, record) == true && bounces < BounceLimit) {
+  	bounces++;
+		
+		vec3 bounceTarget = reflect(r.direction , record.normal) + record.p;
+		//vec3 bounceTarget = record.normal + record.p + randomInSphere(gl_FragCoord.xy, bounces);
+		r.origin = record.p;
+		r.direction = bounceTarget - r.origin;
+		
+		colour += World[record.object].mat.colour * lighting(r, record.normal);
+		//shiny *= World[record.object].mat.shiny;
+	}
+	if (bounces > 0.0) {
+		return colour * skyColour(r.direction) / bounces;
+	} 
+	//else if ( bounces > BounceLimit) {
+    //return 0.5*vec3(unitDirection + 1.0) / bounces;
+  //  return colour * skyColour(r.direction) / bounces;
+		//return vec3(0.0,0.0,0.0);
+ // }
+	return skyColour(r.direction);
 }
+    
+void main() {
+	World[0].centre.x += sin(iTime);
+  World[0].centre.y += cos(iTime);
+	World[2].centre.x += -sin(iTime);
+  World[2].centre.y += -cos(iTime);
+  //cam.location.z = sin(iTime);
+ 	
+  vec3 AAcheck[4];
+	float AAdist = 1.0;
+	Ray ray = GetRay(cam, vec2(0.0, AAdist));
+	AAcheck[0] = rayColour(ray, World); // up colour
+	
+	ray = GetRay(cam, vec2(AAdist, 0.0));
+	AAcheck[1] = rayColour(ray, World); // right colour
+	
+	ray = GetRay(cam, vec2(0.0, -AAdist));
+	AAcheck[2] = rayColour(ray, World); // down colour
+	
+	ray = GetRay(cam, vec2(-AAdist, 0.0));
+  AAcheck[3] = rayColour(ray, World); // left colour
+	
+	vec3 verticalDif = (AAcheck[0] - AAcheck[2]) - (AAcheck[2] - AAcheck[0]); // the differnce between the colour a bit up and a bit down
+	vec3 horizontalDif = (AAcheck[3] - AAcheck[1]) - (AAcheck[1] - AAcheck[3]); // the difference between the colour a bit left and a bit right
+	vec3 colourDif = abs(verticalDif) + abs(horizontalDif); // add both colour differences
+	float totalDif = colourDif.r + colourDif.g + colourDif.b;
+	/*
+	if (totalDif >= 0.01) {
+		outColour = vec4(1.0, 1.0, 1.0, 1.0);
+	}
+	else {
+		outColour = vec4(0.3, 0.3, 0.3, 1.0);
+	}
+	*/
+	
+	// if the difference in colours is greater than a threshold, then multisample the pixel for AA
+	if(totalDif > AAthreshold) {
+		
+		outColour = vec4(0.0, 0.0, 0.0, 0.0);
+  	for (float i; i < SamplesPerPixel; i++) {
+	
+			vec2 rayShift = vec2(
+				trand(gl_FragCoord.xy, 0.123 * i),
+				trand(gl_FragCoord.xy, 0.456 * i)); // random vector from -1,1
+    	ray = GetRay(cam, rayShift);
+
+    	outColour += vec4(rayColour(ray, World), 1.0);
+  	}
+		outColour /= SamplesPerPixel;
+	} 
+	else {
+		ray = GetRay(cam, vec2(0.0, 0.0) );
+    //outColour = vec4(rayColour(ray, World), 1.0);
+		vec3 avgColour = (AAcheck[0] + AAcheck[1] + AAcheck[2] + AAcheck[3]) / 4.0; // averages the colours from the AA check
+		outColour = vec4(avgColour, 1.0);
+	}
+  outColour = vec4(
+    sqrt(outColour.x),
+    sqrt(outColour.y),
+    sqrt(outColour.z), 1.0);
+}
+/////////////////////////////////////////////////////////////////////////////
 </script>
 
 <script>
@@ -278,7 +445,7 @@ function main() {
     requestId = undefined;
     now *= 0.001;  // convert to seconds
     const elapsedTime = Math.min(now - then, 0.1);
-    console.log(Math.round(1/elapsedTime));
+    //console.log(Math.round(1/elapsedTime));
     time += elapsedTime;
     then = now;
 
