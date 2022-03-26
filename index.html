@@ -86,10 +86,10 @@ Camera cam = Camera(
     -1.0
 );
 
-const Material blue = Material( vec3(0.0, 0.0, 0.9), 0.9);
+const Material blue = Material( vec3(0.0, 0.0, 0.9), 1.0);
 const Material red  = Material( vec3(0.9, 0.0, 0.0), 0.2);
-const Material green  = Material( vec3(0.0, 0.7, 0.2), 0.2);
-const Material yellow  = Material( vec3(0.5, 0.5, 0.0), 0.2);
+const Material green  = Material( vec3(0.0, 0.9, 0.2), 0.0);
+const Material yellow  = Material( vec3(0.5, 0.5, 0.0), 0.4);
 const Material white = Material( vec3(0.9, 0.9, 0.9), 0.0);
 
 // calculates the ray from the camera position and the offset (for anti aliasing)
@@ -157,7 +157,7 @@ bool hitSphere (Sphere sphere, Ray r, inout Hit record, float t_min, float t_max
 	return true;
 }
 
-bool hitWorld (Sphere scene[WorldLength], Ray r, out Hit record) {
+bool hitWorld (Ray r, out Hit record) {
 		Hit temp_hit = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false, 0);
     bool hitSomething = false;
     float closest = 100.0;
@@ -173,22 +173,29 @@ bool hitWorld (Sphere scene[WorldLength], Ray r, out Hit record) {
     return hitSomething;
 }
 
-float lighting(Ray r, vec3 normal) {
+void lighting(Ray r, vec3 normal, out float lightAndSpecular[2]) {
 	Hit shadowHit = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false, 0);
 	bool shadowed = true;
 	float light = 0.3; // inital ambient amount
+	float specular = 0.0;
+
 	vec3 reflected = normalize(reflect(r.direction, normal));
+
   for (int i = 0; i <= LightLength - 1; i++) {
     //Ray lightRay = Ray(r.origin, normalize( (Lights[i].centre + (randomInSphere(gl_FragCoord.xy, 1.234) * Lights[i].radius) - r.origin) ));
 		Ray lightRay = Ray(r.origin, normalize(Lights[i].centre  - r.origin) );
-    if (hitWorld(World, lightRay, shadowHit) == true) {
+
+    if (hitWorld(lightRay, shadowHit) == true) {
     } else {
+
     	light += max( dot(lightRay.direction, normalize(normal)), 0.0);
-			light += max( dot(reflected, normalize(normal)), 0.0);
+			specular += max( dot(reflected, normalize(normal)), 0.0);
     	shadowed = false;
     }
+
   }
-  return light;
+  lightAndSpecular[0] = light;
+  lightAndSpecular[1] = specular;
 }
 
 vec3 skyColour (vec3 direction) {
@@ -197,34 +204,57 @@ vec3 skyColour (vec3 direction) {
 }
 
 vec3 rayColour (Ray r, Sphere scene[WorldLength]) {
-  Hit record = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false, 1 );
-    
-  vec3 unitDirection;
-  float t;
-  float bounces = 0.0;
-  vec3 colour = vec3(0.0, 0.0, 0.0);
-	float shiny = 1.0;
 
-  while ( hitWorld(scene, r, record) == true && bounces < BounceLimit) {
-  	bounces++;
+  Hit record = Hit( vec3(0.0,0.0,0.0), vec3(0.0,0.0,0.0), 0.0, false, 0 );
+   
+	float total_reflectivity = 1.0; // how much of the rays light has not been absorbed
+	vec3 colour = vec3(0.0, 0.0, 0.0);
+	float bounces = 0.0; 
+	bool bounced = false;
+
+	while (true) {
+
+		bounced = hitWorld(r, record); // scan through with the ray
+
+		if (bounced == true && total_reflectivity > 0.0) { // ray bounces and hits something else
+
+			bounces += 1.0; // increment bounces
+
+			//vec3 bounceTarget = record.normal + record.p + randomInSphere(gl_FragCoord.xy, bounces);
+			vec3 bounceTarget = reflect(r.direction, record.normal) + record.p;
+
+			r.origin = record.p; // update the ray to where it bounced
+			r.direction = bounceTarget - r.origin; // bounces the ray
+
+			float lightAndSpecular[2];
+			lighting(r, record.normal, lightAndSpecular);
+
+			vec3 self_colour = World[record.object].mat.colour * lightAndSpecular[0];// the colour of this object
+			self_colour += lightAndSpecular[1];
+			
+			colour += self_colour * total_reflectivity;
+			total_reflectivity -= (1.0 - (World[record.object].mat.shiny * bounces));
+
+			
+
+		} else { // ray hits sky
+
+			if (bounces == 0.0) { // directly into sky
+				return skyColour(r.direction);
+			}
+
+			// bounced and then bounced into the sky
+			//return vec3(0.2,0.2,0.3);
+			colour += skyColour(r.direction) * total_reflectivity; // add the sky colour
+			return colour /= bounces;
+		}
+
+		if (bounces >= BounceLimit) { // bounced too many times
+			//bounces++; // adds an extra bounce to darken it
+			return colour /= bounces;
+		}
 		
-		vec3 bounceTarget = reflect(r.direction , record.normal) + record.p;
-		//vec3 bounceTarget = record.normal + record.p + randomInSphere(gl_FragCoord.xy, bounces)/2.0;
-		r.origin = record.p;
-		r.direction = bounceTarget - r.origin;
-		
-		colour += World[record.object].mat.colour * lighting(r, record.normal);
-		//shiny *= World[record.object].mat.shiny;
-	}
-	if (bounces > 0.0) {
-		return colour * skyColour(r.direction) / bounces;
 	} 
-	//else if ( bounces > BounceLimit) {
-    //return 0.5*vec3(unitDirection + 1.0) / bounces;
-  //  return colour * skyColour(r.direction) / bounces;
-		//return vec3(0.0,0.0,0.0);
- // }
-	return skyColour(r.direction);
 }
     
 void main() {
@@ -252,14 +282,12 @@ void main() {
 	vec3 horizontalDif = (AAcheck[3] - AAcheck[1]) - (AAcheck[1] - AAcheck[3]); // the difference between the colour a bit left and a bit right
 	vec3 colourDif = abs(verticalDif) + abs(horizontalDif); // add both colour differences
 	float totalDif = colourDif.r + colourDif.g + colourDif.b;
-	/*
-	if (totalDif >= 0.01) {
-		outColour = vec4(1.0, 1.0, 1.0, 1.0);
-	}
-	else {
-		outColour = vec4(0.3, 0.3, 0.3, 1.0);
-	}
-	*/
+	
+	//if (totalDif >= 0.01) {
+	//	outColour = vec4(1.0, 1.0, 1.0, 1.0);
+	//} else {
+	//	outColour = vec4(0.3, 0.3, 0.3, 1.0);
+	//};
 	
 	// if the difference in colours is greater than a threshold, then multisample the pixel for AA
 	if(totalDif > AAthreshold) {
