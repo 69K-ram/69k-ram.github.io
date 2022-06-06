@@ -542,7 +542,7 @@ function main() {
   let timeStart = Date.now(); // ms since jan 1 1970
 
   function getData() {
-    return fetch('starsOfTheNight.wav', { mode: 'no-cors'})
+    return fetch('starsOfTheNight.wav')
     .then(function(response) {
       return response.arrayBuffer();
     });
